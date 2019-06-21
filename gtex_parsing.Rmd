@@ -63,6 +63,7 @@ samples %>%
   theme(axis.text = element_text(color = "black", size = 12),
         axis.title = element_blank(),
         axis.ticks.length = unit(0.2, "cm"))
+ggsave(file = "res/sample_count.pdf", dpi = 600, height = 8, width = 11)
 
 ```
 
@@ -96,7 +97,6 @@ tmp <- unique(unlist(tmp))
 
 data_mat <- data_mat[tmp, ]
 colnames(data_mat) <- seq(1, ncol(data_mat))
-
 ```
 
 ```{r umap_viz}
@@ -105,7 +105,7 @@ umap_plot <- umap::umap(d = t(data_mat),
                         random_state = 123,
                         n_epochs = 100,
                         min_dist = 0.1,
-                        n_neighbors = 15)
+                        n_neighbors = 15, metric = "cosine")
 
 # build data frame
 umap_df <- tibble::tibble(x = umap_plot$layout[, 1],
@@ -121,15 +121,18 @@ p1 <- umap_df %>%
         axis.ticks.length = unit(0.2, "cm"),
         axis.text = element_text(size = 12),
         legend.position = "none")
+plot(p1) %>% ggsave(file = "res/umap_tissue.pdf", height = 8, width = 11, dpi = 600)
 
 p2 <- umap_df %>%
   ggplot() + 
   geom_point(aes(x = x, y = y, color = sub_tissue), alpha = 0.75, size = 2) + 
+  labs(x = "x", y = "y", title = "Sub-tissue") +
   theme_bw() +
   theme(axis.title = element_blank(),
         axis.ticks.length = unit(0.2, "cm"),
         axis.text = element_text(size = 12),
         legend.position = "none")
+plot(p2) %>% ggsave(file = "res/umap_sub-tissue.pdf", height = 8, width = 11, dpi = 600)
 
 
 ggplotly(p1)
