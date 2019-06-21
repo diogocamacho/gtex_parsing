@@ -25,4 +25,7 @@ samples %>%
 
 which will produce:
 
-![number_samples](res/sample_count.pdf)
+![](res/sample_count.png)
+
+
+## 
