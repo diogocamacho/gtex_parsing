@@ -28,4 +28,24 @@ which will produce:
 ![](res/sample_count.png)
 
 
-## 
+## UMAP on tissues
+Running UMAP on a subset of samples and subset of genes. In R:
+
+```r
+umap_plot <- umap::umap(d = t(data_mat), 
+                        method = "naive", 
+                        random_state = 123,
+                        n_epochs = 100,
+                        min_dist = 0.1,
+                        n_neighbors = 15, 
+                        metric = "cosine")
+```
+
+which produces:
+
+![](res/umap_tissue.png)
+
+## UMAP on sub-tissue classification
+Same as before. Plot:
+
+![](res/umap_sub-tissue.png)
