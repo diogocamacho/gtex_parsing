@@ -1,0 +1,140 @@
+---
+title: "Parsing GTEx data (version 7)"
+author: Diogo M. Camacho
+date: `r format(Sys.Date(), "%Y-%m-%d")`
+output: html_notebook
+---
+
+Here i will parse the GTEx count data and generate an `R` data frame. This will work on the version 7 of the GTEx data, which has been pre-processed outside of R with a series of `bash` commands, to isolate the different components of the data. I will generate a script to reproduce these transformations and clean up later. The following commands will be incorporated into a single `R` script as a wrapper for the work here.
+ 
+```{r libraries}
+library(readr)
+library(dplyr)
+library(umap)
+library(ggplot2)
+library(forcats)
+library(plotly)
+```
+
+# Loading count data
+```{r read_counts}
+count_data <- readr::read_delim("data/gtex_v7_count_data.gct", 
+                                delim = "\t", 
+                                col_names = FALSE)
+```
+
+# Load gene data
+```{r read_genes}
+genes <- readr::read_delim(file = "data/gtex_v7_genes.txt", 
+                           delim = "\t")
+```
+
+# Load samples
+```{r load_samples}
+samples <- readr::read_delim(file = "data/gtex_v7_sample_ids.txt", 
+                             delim = "\t", 
+                             col_names = FALSE)
+```
+
+# Load annotations
+```{r load_annotations}
+subject_annotations <- readr::read_delim(file = "data/GTEx_v7_Annotations_SubjectPhenotypesDS.txt", 
+                                         delim = "\t")
+
+sample_annotations <- readr::read_delim(file = "data/GTEx_v7_Annotations_SampleAttributesDS.txt", 
+                                        delim = "\t")
+```
+
+I'm going to count how many samples we have per tissue, and plot the corresponding results.
+
+```{r tissue_representation}
+samples <- samples %>% 
+  dplyr::mutate(., tissue = sample_annotations$SMTSD[match(X1, sample_annotations$SAMPID)]) %>%
+  dplyr::mutate(., type = sample_annotations$SMAFRZE[match(X1, sample_annotations$SAMPID)]) %>%
+  dplyr::mutate(., broader_type = sample_annotations$SMTS[match(X1, sample_annotations$SAMPID)])
+
+samples %>%
+  dplyr::group_by(., tissue) %>%
+  dplyr::count() %>%
+  ggplot() + 
+  geom_col(aes(y = n, x = forcats::fct_reorder(tissue, n))) +
+  coord_flip() + 
+  theme_bw() + 
+  theme(axis.text = element_text(color = "black", size = 12),
+        axis.title = element_blank(),
+        axis.ticks.length = unit(0.2, "cm"))
+
+```
+
+
+# Visualization
+I will try and do some `umap` here. Because we have 11k samples, I will sample 25 samples per tissue as representative of the tissue itself and I will only look at the top 10% of genes in terms of abundance, per each of those samples.
+
+```{r reduce_dataset}
+utis <- unique(samples$tissue)
+
+sel_samples <- vector(mode = "list", length = length(utis))
+for (i in seq(1, length(sel_samples))) {
+  x1 <- which(samples$tissue == utis[i])
+  if (length(x1) < 25) {
+    sel_samples[[i]] <- x1
+  } else {
+    sel_samples[[i]] <- sample(x = x1, size = 25, replace = FALSE)
+  }
+}
+sel_samples <- unlist(sel_samples)
+
+data_labels <- samples[sel_samples, ]
+
+data_mat <- count_data[, sel_samples]
+tmp <- vector(mode = "list", length = ncol(data_mat))
+num_els <- ceiling(0.1 * nrow(data_mat))
+for (i in seq(1, length(tmp))) {
+  tmp[[i]] <- sort(as.matrix(data_mat[, i]), decreasing = TRUE, index.return = TRUE)$ix[1:num_els]
+}
+tmp <- unique(unlist(tmp))
+
+data_mat <- data_mat[tmp, ]
+colnames(data_mat) <- seq(1, ncol(data_mat))
+
+```
+
+```{r umap_viz}
+umap_plot <- umap::umap(d = t(data_mat), 
+                        method = "naive", 
+                        random_state = 123,
+                        n_epochs = 100,
+                        min_dist = 0.1,
+                        n_neighbors = 15)
+
+# build data frame
+umap_df <- tibble::tibble(x = umap_plot$layout[, 1],
+                          y = umap_plot$layout[, 2],
+                          sub_tissue = data_labels$tissue[as.numeric(rownames(umap_plot$layout))],
+                          tissue = data_labels$broader_type[as.numeric(rownames(umap_plot$layout))])
+
+p1 <- umap_df %>%
+  ggplot() + 
+  geom_point(aes(x = x, y = y, color = tissue), alpha = 0.75, size = 2) + 
+  theme_bw() +
+  theme(axis.title = element_blank(),
+        axis.ticks.length = unit(0.2, "cm"),
+        axis.text = element_text(size = 12),
+        legend.position = "none")
+
+p2 <- umap_df %>%
+  ggplot() + 
+  geom_point(aes(x = x, y = y, color = sub_tissue), alpha = 0.75, size = 2) + 
+  theme_bw() +
+  theme(axis.title = element_blank(),
+        axis.ticks.length = unit(0.2, "cm"),
+        axis.text = element_text(size = 12),
+        legend.position = "none")
+
+
+ggplotly(p1)
+ggplotly(p2)
+
+
+
+```
