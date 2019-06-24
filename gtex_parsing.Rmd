@@ -27,6 +27,11 @@ count_data <- readr::read_delim("data/gtex_v7_count_data.gct",
 ```{r read_genes}
 genes <- readr::read_delim(file = "data/gtex_v7_genes.txt", 
                            delim = "\t")
+
+genes <- genes %>% 
+  dplyr::mutate(., ensembl_id = sapply(Name, function(y) strsplit(y, "\\.")[[1]][1])) %>% 
+  dplyr::mutate(., entrez_id = AnnotationDbi::mapIds(x = org.Hs.eg.db, keys = ensembl_id, keytype = "ENSEMBL", column = "ENTREZID")) %>% 
+  dplyr::mutate(., symbol = AnnotationDbi::mapIds(x = org.Hs.eg.db, keys = ensembl_id, keytype = "ENSEMBL", column = "SYMBOL"))
 ```
 
 # Load samples
@@ -49,9 +54,21 @@ I'm going to count how many samples we have per tissue, and plot the correspondi
 
 ```{r tissue_representation}
 samples <- samples %>% 
-  dplyr::mutate(., tissue = sample_annotations$SMTSD[match(X1, sample_annotations$SAMPID)]) %>%
-  dplyr::mutate(., type = sample_annotations$SMAFRZE[match(X1, sample_annotations$SAMPID)]) %>%
-  dplyr::mutate(., broader_type = sample_annotations$SMTS[match(X1, sample_annotations$SAMPID)])
+  dplyr::mutate(., sub_tissue = sample_annotations$SMTSD[match(X1, sample_annotations$SAMPID)]) %>%
+  dplyr::mutate(., tissue = sample_annotations$SMTS[match(X1, sample_annotations$SAMPID)]) %>%
+  dplyr::mutate(., subject_id = sapply(X1, function(y) paste0(strsplit(y, "-")[[1]][c(1,2)], collapse = "-"))) %>%
+  dplyr::select(., -X1) %>%
+  dplyr::mutate(., gender = sapply(subject_id, function(y) subject_annotations$SEX[subject_annotations$SUBJID == y])) %>%
+  dplyr::mutate(., age = sapply(subject_id, function(y) subject_annotations$AGE[subject_annotations$SUBJID == y])) %>%
+  dplyr::mutate(., cause_death = sapply(subject_id, function(y) subject_annotations$DTHHRDY[subject_annotations$SUBJID == y])) %>% 
+  dplyr::mutate(., gender = replace(gender, list = which(gender == 1), "male")) %>%
+  dplyr::mutate(., gender = replace(gender, list = which(gender == 2), "female")) %>%
+  dplyr::mutate(., cause_death = replace(cause_death, list = which(cause_death == 0), "ventilator")) %>%
+  dplyr::mutate(., cause_death = replace(cause_death, list = which(cause_death == 1), "violent")) %>%
+  dplyr::mutate(., cause_death = replace(cause_death, list = which(cause_death == 2), "natural")) %>%
+  dplyr::mutate(., cause_death = replace(cause_death, list = which(cause_death == 3), "intermediate")) %>%
+  dplyr::mutate(., cause_death = replace(cause_death, list = which(cause_death == 4), "slow"))
+
 
 samples %>%
   dplyr::group_by(., tissue) %>%
@@ -63,33 +80,34 @@ samples %>%
   theme(axis.text = element_text(color = "black", size = 12),
         axis.title = element_blank(),
         axis.ticks.length = unit(0.2, "cm"))
-ggsave(file = "res/sample_count.pdf", dpi = 600, height = 8, width = 11)
+ggsave(file = "res/sample_count.png", dpi = 600, height = 8, width = 11)
 
 ```
 
 
 # Visualization
-I will try and do some `umap` here. Because we have 11k samples, I will sample 25 samples per tissue as representative of the tissue itself and I will only look at the top 10% of genes in terms of abundance, per each of those samples.
+I will try and do some `umap` here. Because we have 11k samples, I will sample 25 samples per tissue as representative of the tissue itself and I will only look at the top 5% of genes in terms of abundance, per each of those samples.
 
 ```{r reduce_dataset}
 utis <- unique(samples$tissue)
 
-sel_samples <- vector(mode = "list", length = length(utis))
-for (i in seq(1, length(sel_samples))) {
-  x1 <- which(samples$tissue == utis[i])
-  if (length(x1) < 25) {
-    sel_samples[[i]] <- x1
-  } else {
-    sel_samples[[i]] <- sample(x = x1, size = 25, replace = FALSE)
-  }
-}
-sel_samples <- unlist(sel_samples)
+# sel_samples <- vector(mode = "list", length = length(utis))
+# for (i in seq(1, length(sel_samples))) {
+#   x1 <- which(samples$tissue == utis[i])
+#   if (length(x1) < 25) {
+#     sel_samples[[i]] <- x1
+#   } else {
+#     sel_samples[[i]] <- sample(x = x1, size = 25, replace = FALSE)
+#   }
+# }
+# sel_samples <- unlist(sel_samples)
+sel_samples <- which(samples$cause_death == "natural")
 
 data_labels <- samples[sel_samples, ]
 
 data_mat <- count_data[, sel_samples]
 tmp <- vector(mode = "list", length = ncol(data_mat))
-num_els <- ceiling(0.1 * nrow(data_mat))
+num_els <- ceiling(0.05 * nrow(data_mat))
 for (i in seq(1, length(tmp))) {
   tmp[[i]] <- sort(as.matrix(data_mat[, i]), decreasing = TRUE, index.return = TRUE)$ix[1:num_els]
 }
@@ -105,13 +123,16 @@ umap_plot <- umap::umap(d = t(data_mat),
                         random_state = 123,
                         n_epochs = 100,
                         min_dist = 0.1,
-                        n_neighbors = 15, metric = "cosine")
+                        n_neighbors = 15, 
+                        metric = "euclidean")
 
 # build data frame
 umap_df <- tibble::tibble(x = umap_plot$layout[, 1],
                           y = umap_plot$layout[, 2],
                           sub_tissue = data_labels$tissue[as.numeric(rownames(umap_plot$layout))],
-                          tissue = data_labels$broader_type[as.numeric(rownames(umap_plot$layout))])
+                          tissue = data_labels$broader_type[as.numeric(rownames(umap_plot$layout))],
+                          age = data_labels$age[as.numeric(rownames(umap_plot$layout))],
+                          gender = data_labels$gender[as.numeric(rownames(umap_plot$layout))])
 
 p1 <- umap_df %>%
   ggplot() + 
@@ -122,6 +143,7 @@ p1 <- umap_df %>%
         axis.text = element_text(size = 12),
         legend.position = "none")
 plot(p1) %>% ggsave(file = "res/umap_tissue.pdf", height = 8, width = 11, dpi = 600)
+plot(p1) %>% ggsave(file = "res/umap_tissue.png", height = 8, width = 11, dpi = 600)
 
 p2 <- umap_df %>%
   ggplot() + 
@@ -133,10 +155,24 @@ p2 <- umap_df %>%
         axis.text = element_text(size = 12),
         legend.position = "none")
 plot(p2) %>% ggsave(file = "res/umap_sub-tissue.pdf", height = 8, width = 11, dpi = 600)
+plot(p2) %>% ggsave(file = "res/umap_sub-tissue.png", height = 8, width = 11, dpi = 600)
 
 
 ggplotly(p1)
 ggplotly(p2)
+
+
+# ggplotly(
+# umap_df %>%
+#   ggplot() + 
+#   geom_point(aes(x = x, y = y, color = sub_tissue, shape = gender), alpha = 0.5, size = 3) + 
+#   theme_bw() +
+#   theme(axis.title = element_blank(),
+#         axis.ticks.length = unit(0.2, "cm"),
+#         axis.text = element_text(size = 12),
+#         legend.position = "none")
+# )
+#   
 
 
 

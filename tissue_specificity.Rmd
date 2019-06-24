@@ -1,0 +1,155 @@
+---
+title: "Tissue specificity based on GTEx"
+author: Diogo M. Camacho
+date: `r format(Sys.Date(), "%Y-%m-%d")`
+output: html_notebook
+---
+
+Here i will parse the GTEx count data and generate an `R` data frame. This will work on the version 7 of the GTEx data, which has been pre-processed outside of R with a series of `bash` commands, to isolate the different components of the data. I will generate a script to reproduce these transformations and clean up later. The following commands will be incorporated into a single `R` script as a wrapper for the work here.
+ 
+```{r libraries_functions}
+library(readr)
+library(dplyr)
+library(umap)
+library(ggplot2)
+library(forcats)
+library(plotly)
+library(Matrix)
+
+source("R/rnaseq_filtering.R")
+source("R/tissue_specificity.R")
+```
+
+# Loading data
+```{r load_data}
+load("data/gtex_rnaseq.RData")
+```
+
+
+# Data cleanup
+
+Here:
+ - Filter genes based on number of reads across a subset of the samples as a minimum
+ 
+```{r data_cleanup}
+# gids <- rnaseq_filtering(data_matrix = count_data, 
+#                          min_counts = 5, 
+#                          min_samples = 0.75)
+
+gids <- which(!is.na(genes$entrez_id))
+
+count_data <- count_data[gids, , drop = TRUE]
+genes <- genes[gids, , drop = TRUE]
+
+uentrez <- unique(genes$entrez_id)
+
+len <- sapply(uentrez, function(y) length(which(genes$entrez_id == y)))
+
+mult_ent <- which(len != 1)
+
+highest_var <- vector(mode = "list", length = length(mult_ent))
+for (i in seq(1, length(mult_ent))) {
+  a1 <- which(genes$entrez_id == uentrez[mult_ent[i]])
+  a2 <- which.max(diag(var(t(as.matrix(count_data[a1, ])))))
+  highest_var[[i]] <- a1[a2]
+}
+highest_var <- unlist(highest_var)
+
+x1 <- setdiff(seq(1, length(uentrez)), union(mult_ent, highest_var))
+
+y1 <- which(genes$entrez_id %in% uentrez[x1])
+x1 <- c(y1, unlist(highest_var))
+x1 <- sort(x1)
+
+clean_counts <- as.matrix(count_data[x1, ])
+clean_genes <- genes[x1, ] %>% dplyr::select(., -Name, -Description)
+
+gids <- rnaseq_filtering(data_matrix = clean_counts, 
+                         min_counts = 5,
+                         min_samples = 0.75)
+
+counts <- clean_counts[gids, , drop = TRUE]
+genes <- clean_genes[gids, , drop = TRUE]
+
+```
+
+
+
+# Calculate tissue specificity
+I will use Stouffer's method to calculate tissue specificity for the genes.
+
+```{r tissue_specificity}
+Z <- tissue_specificity(counts)
+```
+
+Now let's transform the Z-scores into p-values and then correct the p-values for multiple tests.
+
+```{r pval_convert}
+P <- t(apply(Z, 1, function(y) p.adjust(2 * pnorm(-abs(y)), "fdr")))
+P[Z < 0] <- 1
+```
+
+
+# Define specificity
+```{r specific_genes}
+ts <- vector(mode = "list", length = nrow(P))
+for (i in seq(1, nrow(P))) {
+  ts[[i]] <- samples[which(P[i, ] < 1e-3), ] %>% 
+    dplyr::group_by(tissue, gender) %>% 
+    dplyr::count() %>% 
+    dplyr::filter(., n >=5) %>%
+    tibble::add_column(., gene = genes$symbol[i])
+}
+ts <- dplyr::bind_rows(ts)
+
+a1 <- ts %>% 
+  dplyr::group_by(., gene) %>% 
+  dplyr::count() # %>% 
+  # dplyr::filter(., n <= 3)
+
+ts %>% 
+  dplyr::filter(gene %in% dplyr::filter(a1, n <= 5)$gene) %>%
+  dplyr::filter(., tissue == "Lung") %>%
+  dplyr::ungroup() %>% 
+  dplyr::distinct(., gene) %>%
+  as.matrix %>%
+  as.vector %>% 
+  sort
+
+```
+
+
+```{r plot_specificity}
+
+ts %>% 
+  dplyr::filter(gene %in% dplyr::filter(a1, n <= 5)$gene) %>%
+  dplyr::filter(., tissue == "Lung") %>%
+  ggplot() +
+  geom_point(aes(x = gene, y = n, color = n), alpha = 0.5) +
+  scale_color_viridis_c() + 
+  facet_grid(. ~ gender) +
+  theme_bw() + 
+  theme(axis.text.x = element_blank(),
+        panel.grid = element_blank())
+
+
+```
+
+
+
+<!-- # Results data frame 
+Finally, I'll make a data frame for the results.
+
+```{r results_df}
+res_df <- tibble::tibble(ensemble_id = rep(genes$Name, ncol(count_data)),
+                         symbol = rep(genes$Description, ncol(count_data)),
+                         tissue = as.vector(sapply(samples$broader_type, rep, nrow(count_data))),
+                         sub_tissue = sapply(samples$tissue, rep, nrow(count_data)),
+                         counts = as.vector(count_data),
+                         specificity_z = as.vector(Z),
+                         specificity_p = as.vector(P), 
+                         specificity_log10 = -log10(specificity_p))
+```
+
+-->
+
