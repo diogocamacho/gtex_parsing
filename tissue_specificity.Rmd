@@ -79,77 +79,294 @@ genes <- clean_genes[gids, , drop = TRUE]
 I will use Stouffer's method to calculate tissue specificity for the genes.
 
 ```{r tissue_specificity}
+
+fs <- which(samples$gender == "female")
+ms <- which(samples$gender == "male")
+Z_female <- tissue_specificity(counts[, fs])
+Z_male <- tissue_specificity(counts[, ms])
+
 Z <- tissue_specificity(counts)
 ```
 
-Now let's transform the Z-scores into p-values and then correct the p-values for multiple tests.
+<!-- Now let's transform the Z-scores into p-values and then correct the p-values for multiple tests. -->
 
-```{r pval_convert}
-P <- t(apply(Z, 1, function(y) p.adjust(2 * pnorm(-abs(y)), "fdr")))
-P[Z < 0] <- 1
-```
+<!-- ```{r pval_convert} -->
+<!-- P <- t(apply(Z, 1, function(y) p.adjust(2 * pnorm(-abs(y)), "fdr"))) -->
+<!-- P[Z < 0] <- 1 -->
+
+<!-- P_female <- t(apply(Z_female, 1, function(y) p.adjust(2 * pnorm(-abs(y)), "fdr"))) -->
+<!-- P_female[Z_female < 0] <- 1 -->
+<!-- P_male <- t(apply(Z_male, 1, function(y) p.adjust(2 * pnorm(-abs(y)), "fdr"))) -->
+<!-- P_male[Z_male < 0] <- 1 -->
+<!-- ``` -->
 
 
 # Define specificity
+We will define specificity based on an arbitrary Z-score threshold, set at Z > 5. From the conversion of a Z-score to a p-value we know that Z = 5 has a p-value pf `r 2 * pnorm(-5)` which is highly siginificant. ALternatively, we could select a p-value threshold and find the Z-score from there. As an example, if we set a p-value based on a Bonferroni correction given the number of genes we have, we would see that our corrected p-value for 0.01 significance would be `r qnorm(.01/nrow(counts))` which would yield Z to be `signif(abs(qnorm(.01 / nrow(counts))), digits = 3)`.
+
+
 ```{r specific_genes}
-ts <- vector(mode = "list", length = nrow(P))
-for (i in seq(1, nrow(P))) {
-  ts[[i]] <- samples[which(P[i, ] < 1e-3), ] %>% 
-    dplyr::group_by(tissue, gender) %>% 
-    dplyr::count() %>% 
-    dplyr::filter(., n >=5) %>%
-    tibble::add_column(., gene = genes$symbol[i])
+
+thr <- 5
+
+## all samples
+D1 <- Z
+D1[Z < thr] <- 0
+D1[D1 != 0] <- 1
+
+## only female
+D2 <- Z_female
+D2[Z_female < thr] <- 0
+D2[D2 != 0] <- 1
+
+## only male
+D3 <- Z_male
+D3[Z_male < thr] <- 0
+D3[D3 != 0] <- 1
+
+
+## build tibbles
+specificity_all <- vector(mode = "list", length = nrow(D1))
+for (i in seq(1, nrow(D1))) {
+  specificity_all[[i]] <- samples[which(D1[i, ] == 1), ] %>% 
+    tibble::add_column(., gene_symbol = genes$symbol[i]) %>% 
+    tibble::add_column(., entrez_id = genes$entrez_id[i])
 }
-ts <- dplyr::bind_rows(ts)
+specificity_all <- dplyr::bind_rows(specificity_all)
 
-a1 <- ts %>% 
-  dplyr::group_by(., gene) %>% 
-  dplyr::count() # %>% 
-  # dplyr::filter(., n <= 3)
+specificity_female <- vector(mode = "list", length = nrow(D2))
+for (i in seq(1, nrow(D2))) {
+  specificity_female[[i]] <- samples[fs[which(D2[i, ] == 1)], ] %>% 
+    tibble::add_column(., gene_symbol = genes$symbol[i]) %>% 
+    tibble::add_column(., entrez_id = genes$entrez_id[i])
+}
+specificity_female <- dplyr::bind_rows(specificity_female)
 
-ts %>% 
-  dplyr::filter(gene %in% dplyr::filter(a1, n <= 5)$gene) %>%
-  dplyr::filter(., tissue == "Lung") %>%
-  dplyr::ungroup() %>% 
-  dplyr::distinct(., gene) %>%
-  as.matrix %>%
-  as.vector %>% 
-  sort
+specificity_male <- vector(mode = "list", length = nrow(D2))
+for (i in seq(1, nrow(D3))) {
+  specificity_male[[i]] <- samples[ms[which(D3[i, ] == 1)], ] %>% 
+    tibble::add_column(., gene_symbol = genes$symbol[i]) %>% 
+    tibble::add_column(., entrez_id = genes$entrez_id[i])
+}
+specificity_male <- dplyr::bind_rows(specificity_male)
+
+# specific tissue counts:
+# for each gene, how many tissues is the gene specifically expressed in, given the parameters above
+stc_all <- specificity_all %>% 
+  dplyr::group_by(., sub_tissue, gender, age, gene_symbol) %>% 
+  dplyr::count() %>% 
+  dplyr::group_by(., gene_symbol, sub_tissue) %>% 
+  dplyr::count() %>% 
+  dplyr::group_by(., gene_symbol) %>% 
+  count()
+
+stc_female <- specificity_female %>% 
+  dplyr::group_by(., sub_tissue, age, gene_symbol) %>% 
+  dplyr::count() %>% 
+  dplyr::group_by(., gene_symbol, sub_tissue) %>% 
+  dplyr::count() %>% 
+  dplyr::group_by(., gene_symbol) %>% 
+  count()
+
+stc_male <- specificity_male %>% 
+  dplyr::group_by(., sub_tissue, age, gene_symbol) %>% 
+  dplyr::count() %>% 
+  dplyr::group_by(., gene_symbol, sub_tissue) %>% 
+  dplyr::count() %>% 
+  dplyr::group_by(., gene_symbol) %>% 
+  count()
+
+
+# TSM %>% 
+#   dplyr::filter(gene_symbol %in% dplyr::filter(a2, n <= 3)$gene_symbol) %>%
+#   dplyr::filter(., sub_tissue == "Lung") %>%
+#   dplyr::ungroup() %>% 
+#   dplyr::distinct(., gene_symbol) %>%
+#   as.matrix %>%
+#   as.vector %>% 
+#   sort
+
+
+## 
+max_tissues <- 5
+
+### filter based on max tissues
+y1 <- specificity_all %>% 
+  dplyr::filter(gene_symbol %in% dplyr::filter(stc_all, n <= 5)$gene_symbol)
+
+y2 <- specificity_female %>% 
+  dplyr::filter(gene_symbol %in% dplyr::filter(stc_female, n <= max_tissues)$gene_symbol)
+
+y3 <- specificity_male %>% 
+  dplyr::filter(gene_symbol %in% dplyr::filter(stc_male, n <= max_tissues)$gene_symbol)
+
+
+### all samples
+a1 <- TSM %>% 
+  dplyr::group_by(., sub_tissue, gene_symbol) %>% 
+  dplyr::count()
+
+a2 <- a1 %>% 
+  dplyr::group_by(., gene_symbol, sub_tissue) %>% 
+  dplyr::count() %>% 
+  dplyr::group_by(., gene_symbol) %>% 
+  count()
+
+max_tissues <- ceiling(a1 %>% ungroup() %>% select(sub_tissue) %>% distinct() %>% nrow * 0.1)
+y3 <- TSM %>% 
+  dplyr::filter(gene_symbol %in% dplyr::filter(a2, n <= max_tissues)$gene_symbol)
+
+# example with pancreas
+z0 <- y1 %>% dplyr::filter(., sub_tissue == "Pancreas") %>% dplyr::select(., gene_symbol) %>% dplyr::distinct() %>% as.matrix %>% as.vector() %>% sort
+z1 <- y2 %>% dplyr::filter(., sub_tissue == "Pancreas") %>% dplyr::select(., gene_symbol) %>% dplyr::distinct() %>% as.matrix %>% as.vector() %>% sort
+z2 <- y3 %>% dplyr::filter(., sub_tissue == "Pancreas") %>% dplyr::select(., gene_symbol) %>% dplyr::distinct() %>% as.matrix %>% as.vector() %>% sort
+
+VennDiagram::venn.diagram(x = list(all = z0, female = z1, male = z2), filename = "res/pancreas-venn-example.png", imagetype = "png")
 
 ```
 
 
 ```{r plot_specificity}
 
-ts %>% 
-  dplyr::filter(gene %in% dplyr::filter(a1, n <= 5)$gene) %>%
-  dplyr::filter(., tissue == "Lung") %>%
+lsplot <- specificity_all %>% 
+  dplyr::filter(gene_symbol %in% dplyr::filter(stc_all, n <= max_tissues)$gene_symbol) %>%
+  dplyr::filter(., sub_tissue == "Lung") %>%
+  dplyr::group_by(., gender, age, gene_symbol) %>%
+  dplyr::count() %>%
+  dplyr::filter(., n > 5) %>%
   ggplot() +
-  geom_point(aes(x = gene, y = n, color = n), alpha = 0.5) +
-  scale_color_viridis_c() + 
-  facet_grid(. ~ gender) +
+  geom_point(aes(x = gene_symbol, y = n, color = gender, age = age, number_samples = n), alpha = 0.5, size = 3) +
+  scale_color_viridis_d() + 
+  # facet_grid(. ~ gender) +
   theme_bw() + 
-  theme(axis.text.x = element_blank(),
-        panel.grid = element_blank())
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+        panel.grid = element_blank(), legend.position = "none")
 
+ggplotly(lsplot, tooltip = c("gene_symbol", "gender", "age", "number_samples"))
 
 ```
 
 
+# UMAP for specific genes
+I want to see if tissues will now cluster based on the expression patterns of the genes for each one of the tissues.
 
-<!-- # Results data frame 
-Finally, I'll make a data frame for the results.
+```{r tissue_specific_umap}
+a1 <- TSM %>% 
+  dplyr::ungroup() %>%
+  # dplyr::select(., -gender, -n) %>%
+  # dplyr::distinct(., gene) %>%
+  dplyr::group_by(., sub_tissue, gene_symbol) %>% 
+  dplyr::distinct(gene_symbol) %>% 
+  dplyr::count() # %>% 
+  # dplyr::filter(., n <= 3)
 
-```{r results_df}
-res_df <- tibble::tibble(ensemble_id = rep(genes$Name, ncol(count_data)),
-                         symbol = rep(genes$Description, ncol(count_data)),
-                         tissue = as.vector(sapply(samples$broader_type, rep, nrow(count_data))),
-                         sub_tissue = sapply(samples$tissue, rep, nrow(count_data)),
-                         counts = as.vector(count_data),
-                         specificity_z = as.vector(Z),
-                         specificity_p = as.vector(P), 
-                         specificity_log10 = -log10(specificity_p))
+utis <- unique(samples$sub_tissue)
+ump <- vector(mode = "list", length = 10)
+for (i in seq(1, length(ump))) {
+  message(paste("maximal number of tissues:", i))
+  y1 <- a1 %>% 
+    dplyr::group_by(., gene_symbol) %>% 
+    dplyr::count() %>% dplyr::filter(., n <= i)
+  
+  y2 <- which(genes$symbol %in% y1$gene_symbol)
+  
+  y3 <- Z
+  
+  b1 <- y1$gene_symbol[which(y1$gene_symbol %in% a1$gene_symbol)]
+  b2 <- which(genes$symbol %in% b1)
+  for (j in seq(1, length(utis))) {
+    b3 <- which(samples$sub_tissue == utis[j])
+    b4 <- which(a1$sub_tissue == utis[j])
+    b5 <- which(genes$symbol %in% intersect(a1$gene_symbol[b4], y1$gene_symbol))
+    b6 <- setdiff(seq(1, nrow(genes)), b5)
+    y3[b6, b3] <- 0
+  }
+  
+  umap_plot <- umap::umap(d = t(y3), 
+                        method = "naive",
+                        random_state = 123,
+                        n_epochs = 100L,
+                        min_dist = 0.1,
+                        n_neighbors = 15, 
+                        metric = "euclidean")
+  
+  ump[[i]] <- tibble::tibble(num_tissues = i,
+                             x = umap_plot$layout[, 1],
+                             y = umap_plot$layout[, 2],
+                             sub_tissue = samples$sub_tissue[as.numeric(gsub("X", "", rownames(umap_plot$layout)))],
+                             tissue = samples$tissue[as.numeric(gsub("X", "", rownames(umap_plot$layout)))],
+                             age = samples$age[as.numeric(gsub("X", "", rownames(umap_plot$layout)))],
+                             gender = samples$gender[as.numeric(gsub("X", "", rownames(umap_plot$layout)))])
+}
+ump2 <- dplyr::bind_rows(ump)
+
+
+
+l <- max(c(max(abs(ump2$y)), max(abs(ump2$x))))
+dev <- "png"
+for (i in seq(1, 10)) {
+  p1 <- ump2 %>%
+  dplyr::filter(., num_tissues == i) %>%
+  ggplot() + 
+  geom_point(aes(x = x, y = y, color = sub_tissue, shape = gender), alpha = 0.5, size = 2) + 
+  xlim(c(-l, l)) +
+  ylim(c(-l, l)) +
+  # scale_color_viridis_d() +
+  # facet_wrap(. ~ gender) +
+  theme_bw() +
+  theme(axis.title = element_blank(),
+        axis.ticks.length = unit(0.2, "cm"),
+        axis.text = element_text(size = 12),
+        legend.position = "none")
+  
+  plot(p1) %>% 
+    ggsave(device = dev,
+           file = paste0("res/umap_tissue_with-specificity_num-tissues-", i,".png"), 
+           height = 8, 
+           width = 11, 
+           dpi = 600)
+  
+  # plot(p1) %>% ggsave(file = "res/umap_tissue_with-specificity.pdf", height = 8, width = 11, dpi = 600)
+}
+
+ggplotly(p1)
+
+
+
+
+
+# a3 <- a1 %>% 
+#   dplyr::filter(., gene %in% a2) %>%
+#   dplyr::ungroup()
+# 
+# a4 <- Z
+# 
+# utis <- unique(a3$tissue)
+# for (i in seq(1, length(utis))) {
+#   b1 <- which(a3$tissue == utis[i])
+#   b2 <- which(samples$tissue == utis[i])
+#   a4[setdiff(seq(1, nrow(counts)), which(genes$symbol %in% a3$gene[b1])), b2] <- 0
+# }
+# 
+# # run umap
+# umap_plot <- umap::umap(d = t(a4), 
+#                         method = "naive", 
+#                         random_state = 123,
+#                         n_epochs = 100,
+#                         min_dist = 0.1,
+#                         n_neighbors = 15, 
+#                         metric = "euclidean")
+# 
+# # build data frame
+# umap_df <- tibble::tibble(x = umap_plot$layout[, 1],
+#                           y = umap_plot$layout[, 2],
+#                           sub_tissue = samples$sub_tissue[as.numeric(gsub("X", "", rownames(umap_plot$layout)))],
+#                           tissue = samples$tissue[as.numeric(gsub("X", "", rownames(umap_plot$layout)))],
+#                           age = samples$age[as.numeric(gsub("X", "", rownames(umap_plot$layout)))],
+#                           gender = samples$gender[as.numeric(gsub("X", "", rownames(umap_plot$layout)))])
+
+
+
 ```
 
--->
 
